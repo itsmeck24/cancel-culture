@@ -2,7 +2,7 @@
 
 Catch the charge. Find the right exit. Confirm you're out.
 
-A [Cubbie](https://cubbie.ai) Skill for the Cubbie Hackathon, Track 1.
+A [Cubbie](https://cubbie.ai) Skill for the Cubbie Hackathon, 
 
 Built at DevHacks S3 by Team Southside: Charith Kutikuppala and Richitha Rekula.
 
