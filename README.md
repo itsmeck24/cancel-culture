@@ -34,18 +34,18 @@ No keys and no extra sign-in. Connecting Google is optional, and only needed for
 
 ## What it does
 
-- Distinguishes trial conversions, paid renewals and student-discount expiry. Reverification is offered
-  when a discount is ending; it never assumes eligibility or promises a student price.
-- Saves an optional reason and need-until date supplied by you. It asks whether the subscription still
-  serves that purpose, without claiming to know your usage.
-- Shows the next documented price and current student rate separately. Missing prices stay unknown;
-  an old receipt does not establish a future renewal.
-
+- Handles three kinds of deadline: a free trial turning paid, a subscription renewing, and a student
+  discount running out. For discounts it shows you how to renew; only the service decides if you still
+  qualify.
+- Remembers why you got something if you tell it ("only until my presentation") and checks in after
+  that, before you're charged. It never guesses whether you still use it.
+- Shows the student price and the full price separately. If an email doesn't say the price, it says so
+  instead of guessing.
 - Separates the trial end, the charge date and the actual cancel-by cutoff. Some services need you to cancel
-  a day early. The Apple trial rule is applied only to trial events, not ordinary paid renewals.
+  a day early, and Apple says to cancel a trial at least 24 hours before it ends.
 - Lets a later email win: an extension moves the deadline, and a cancellation email stops the reminder.
-- Reminds you at least 48 hours before the cutoff, at a time you pick. Scanning the same email twice never
-  adds no duplicate evidence; existing reminders are checked before scheduling another.
+- Reminds you at least 48 hours before the cutoff, at a time you pick. Reading the same email twice never
+  creates a second reminder.
 - Sends you to whoever actually bills you (Apple, Google Play or the service itself), using official pages
   only.
 - Never cancels, signs in or pays for you. When you say "done", it records that you cancelled. It only calls
@@ -56,9 +56,6 @@ No keys and no extra sign-in. Connecting Google is optional, and only needed for
 
 ```
 SKILL.md                      what Cubbie follows
-scripts/trials.py             subscription evidence, purpose preferences and date math (Python 3, no packages)
-references/billing-routes.md  official cancel and student-verification routes
+scripts/trials.py             saved list, deadlines and reminder times (Python 3, no packages)
+references/billing-routes.md  official cancel and student-discount renewal pages
 ```
-
-Local script tests cover evidence and date handling. Gmail access, reminder delivery and account handoff
-still require testing on Cubbie; local tests do not establish those integrations.

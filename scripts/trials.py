@@ -63,6 +63,25 @@ def parse_now(text: str) -> datetime:
     return now
 
 
+def parse_sent(value, zone: tzinfo) -> tuple[datetime, bool]:
+    """Read a message's sent date. Returns (aware datetime, exact). A date with no time, or a time
+    with no zone, is read in the student's zone so screenshots and forwards still work."""
+    text = str(value).strip()
+    try:
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+            return datetime.combine(date.fromisoformat(text), time(0, 0), tzinfo=zone), False
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        raise Problem(f"Can't read sent_at '{text}'. Use 2026-10-20T09:00-07:00, or 2026-10-20 if only the date is shown.")
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=zone), False
+    return dt, True
+
+
+def sent_key(e: dict) -> datetime:
+    return parse_sent(e["sent_at"], timezone.utc)[0]
+
+
 def parse_when(value, zone: tzinfo, notes: list, label: str):
     """Return (aware datetime, precision) or (None, None). Date-only values become the start of that
     day in the student's zone (the conservative reading) with precision 'date'."""
@@ -145,7 +164,7 @@ def new_id(state: dict, service: str, account: str | None) -> str:
 
 # ---------- evidence ----------
 
-def clean_item(item: dict, now: datetime) -> tuple[dict, list]:
+def clean_item(item: dict, now: datetime, zone: tzinfo) -> tuple[dict, list]:
     warnings = []
     if not isinstance(item, dict) or not str(item.get("service") or "").strip():
         raise Problem("Every evidence item needs a 'service' name.")
@@ -182,7 +201,10 @@ def clean_item(item: dict, now: datetime) -> tuple[dict, list]:
     if not out.get("sent_at"):
         out["sent_at"] = now.isoformat()
         warnings.append(f"No sent_at for a {out['service']} message; used the current time for ordering.")
-    parse_now(out["sent_at"])
+    sent, exact = parse_sent(out["sent_at"], zone)
+    if not exact:
+        warnings.append(f"The {out['service']} message shows no exact send time; read it in the student's zone.")
+    out["sent_at"] = sent.isoformat()
     if out.get("quote"):
         out["quote"] = str(out["quote"])[:240]
     out["source"] = str(out.get("source") or fingerprint(out))
@@ -211,10 +233,10 @@ def find_trial(state: dict, item: dict) -> tuple[str | None, str | None]:
     return None, None
 
 
-def ingest(state: dict, items: list, now: datetime) -> tuple[list, list]:
+def ingest(state: dict, items: list, now: datetime, zone: tzinfo) -> tuple[list, list]:
     changes, warnings = [], []
     for raw in items:
-        item, w = clean_item(raw, now)
+        item, w = clean_item(raw, now, zone)
         if any(e["source"] == item["source"] for t in state["trials"].values() for e in t["evidence"]):
             continue
         warnings += w
@@ -237,7 +259,7 @@ def ingest(state: dict, items: list, now: datetime) -> tuple[list, list]:
         if note and note != "ambiguous":
             item["match_note"] = note
         trial["evidence"].append(item)
-        trial["evidence"].sort(key=lambda e: parse_now(e["sent_at"]))
+        trial["evidence"].sort(key=sent_key)
         if not changes or not changes[-1].startswith(f"{tid}: new"):
             changes.append(f"{tid}: added {item['kind']} message ({item['source']})")
     return changes, warnings
@@ -247,7 +269,7 @@ def ingest(state: dict, items: list, now: datetime) -> tuple[list, list]:
 
 def derive(trial: dict, zone: tzinfo, now: datetime) -> dict:
     notes: list = []
-    ev = sorted(trial["evidence"], key=lambda e: parse_now(e["sent_at"]))
+    ev = sorted(trial["evidence"], key=sent_key)
     latest = {}
     # Dates come as a group from the newest message that states any of them, so an older cutoff
     # never survives an extension that moved the dates.
@@ -299,7 +321,7 @@ def derive(trial: dict, zone: tzinfo, now: datetime) -> dict:
     if status_ev:
         status = {"cancelled": "cancellation_evidenced", "charged": "charged", "discount_renewed": "discount_renewal_evidenced"}.get(status_ev["kind"], "active")
     mark = trial.get("user_mark")
-    if mark and status_ev and parse_now(mark["at"]) >= parse_now(status_ev["sent_at"]) and status == "active":
+    if mark and status_ev and parse_now(mark["at"]) >= sent_key(status_ev) and status == "active":
         status = {"active": "active"}.get(mark["as"], mark["as"])
     elif mark and not status_ev:
         status = mark["as"]
@@ -310,27 +332,33 @@ def derive(trial: dict, zone: tzinfo, now: datetime) -> dict:
     if status == "active" and deadline is not None and deadline <= now:
         status = "deadline_passed"
 
+    # The student's own reason ("only until my presentation") never replaces the billing cutoff. It adds a
+    # check-in after that need ends, as long as that is still before the cutoff.
     purpose = trial.get("purpose") or {}
     purpose_end, purpose_precision = parse_when(purpose.get("until"), zone, notes, "purpose end")
     purpose_due = bool(purpose_end and purpose_end <= now)
+    review_after = None
     action_deadline, action_precision = deadline, precision
     action_reason = "student discount expiring" if event_type == "student_discount" else "upcoming subscription charge"
     if purpose.get("text"):
         action_reason = f"Student's stated purpose: {purpose['text']}"
         if purpose_due:
-            action_reason += "; the stated need-until date has passed — ask whether it is still needed"
-        if purpose_end and purpose_end > now and (deadline is None or purpose_end < deadline):
-            action_deadline, action_precision = purpose_end, purpose_precision
-            action_reason += "; review when that need ends, not a billing cutoff"
-    if status == "needs_info" and purpose_end and purpose_end > now:
-        status = "active"
+            action_reason += "; that need-until date has passed, so ask whether it is still needed"
+        elif purpose_end and (deadline is None or purpose_end < deadline):
+            review_after = purpose_end
+            action_reason += "; check in after that need ends" + (", before the charge" if deadline else "")
+    if deadline is None and purpose_end:
+        action_deadline, action_precision = purpose_end, purpose_precision
+    if status == "needs_info" and purpose_end:
+        status = "review_now" if purpose_due else "active"
     hours_left = round((action_deadline - now).total_seconds() / 3600, 1) if action_deadline else None
-    needs_action = status in ("active", "cancel_requested")
+    needs_action = status in ("active", "cancel_requested", "review_now")
+    anchor = review_after or deadline or purpose_end
 
     rem = trial.get("reminders", [])
     reminder = "none"
     if rem:
-        current = action_deadline.isoformat() if action_deadline else None
+        current = anchor.isoformat() if anchor else None
         if not needs_action:
             reminder = "remove (no longer needed)"
         elif any(r.get("for_deadline") != current for r in rem):
@@ -362,6 +390,10 @@ def derive(trial: dict, zone: tzinfo, now: datetime) -> dict:
                     else ["cancel", "keep", "remind"]) if needs_action else [],
         "action_by": fmt(action_deadline, zone, action_precision),
         "action_by_iso": action_deadline.isoformat() if action_deadline else None,
+        "deadline_iso": deadline.isoformat() if deadline else None,
+        "review_after": fmt(review_after, zone, purpose_precision) if review_after else None,
+        "review_after_iso": review_after.isoformat() if review_after else None,
+        "reminder_anchor_iso": anchor.isoformat() if anchor else None,
         "purpose": purpose.get("text"),
         "needed_until": fmt(purpose_end, zone, purpose_precision),
         "purpose_due": purpose_due,
@@ -389,7 +421,7 @@ def derive(trial: dict, zone: tzinfo, now: datetime) -> dict:
     return {k: v for k, v in view.items() if v not in (None, [], "")}
 
 
-ORDER = {"active": 0, "cancel_requested": 0, "needs_info": 1, "needs_review": 1, "deadline_passed": 2,
+ORDER = {"active": 0, "cancel_requested": 0, "review_now": 0, "needs_info": 1, "needs_review": 1, "deadline_passed": 2,
          "cancellation_reported": 3, "reverification_reported": 3, "kept": 4, "cancellation_evidenced": 5, "discount_renewal_evidenced": 5, "charged": 6}
 
 
@@ -410,7 +442,26 @@ def summary(state: dict, zone: tzinfo, now: datetime, only_open: bool) -> list:
 def plan(trial_view: dict, zone: tzinfo, now: datetime, lead_hours: float, hour: int) -> dict:
     if not trial_view.get("needs_action"):
         return {"id": trial_view["id"], "plan": "no_reminder", "why": f"status is {trial_view['status']}"}
-    deadline = datetime.fromisoformat(trial_view.get("action_by_iso") or trial_view["cancel_by_iso"])
+    if trial_view["status"] == "review_now":
+        return {"id": trial_view["id"], "plan": "ask_now",
+                "why": "the date the student said they needed it until has passed; ask whether they still need it"}
+    deadline = datetime.fromisoformat(trial_view["deadline_iso"]) if trial_view.get("deadline_iso") else None
+    note = None
+    if trial_view.get("review_after_iso"):
+        review = datetime.fromisoformat(trial_view["review_after_iso"])
+        at = review.astimezone(zone).replace(hour=hour, minute=0, second=0, microsecond=0)
+        at = max(at, review, now + timedelta(minutes=30))
+        if deadline is None or at <= deadline - timedelta(hours=12):
+            out = {"id": trial_view["id"], "plan": "remind", "kind": "after_need_ends", "at": fmt(at, zone),
+                   "at_iso": at.isoformat(), "needed_until": trial_view.get("needed_until"),
+                   "why": "after the need the student stated ends" + (", before the charge" if deadline else "")}
+            if deadline:
+                out["action_by"] = trial_view.get("action_by")
+            return out
+        note = "The stated need ends too close to the cutoff, so this reminder comes before the cutoff instead."
+    if deadline is None:
+        return {"id": trial_view["id"], "plan": "no_reminder",
+                "why": "no charge or cutoff date known yet; ask for the email or the date"}
     if deadline <= now:
         return {"id": trial_view["id"], "plan": "passed", "why": "the action deadline has already passed"}
     target = deadline - timedelta(hours=lead_hours)
@@ -419,10 +470,15 @@ def plan(trial_view: dict, zone: tzinfo, now: datetime, lead_hours: float, hour:
     if at > local_target:
         at -= timedelta(days=1)
     if at > now + timedelta(minutes=10):
-        return {"id": trial_view["id"], "plan": "remind", "at": fmt(at, zone), "at_iso": at.isoformat(),
-                "lead_hours": round((deadline - at).total_seconds() / 3600, 1), "action_by": trial_view.get("action_by", trial_view.get("cancel_by"))}
-    out = {"id": trial_view["id"], "plan": "act_now", "hours_left": trial_view["hours_left"],
-           "why": f"less than {lead_hours:g} hours of notice is left", "action_by": trial_view.get("action_by", trial_view.get("cancel_by"))}
+        out = {"id": trial_view["id"], "plan": "remind", "kind": "before_cutoff", "at": fmt(at, zone),
+               "at_iso": at.isoformat(), "lead_hours": round((deadline - at).total_seconds() / 3600, 1),
+               "action_by": trial_view.get("action_by")}
+        if note:
+            out["note"] = note
+        return out
+    out = {"id": trial_view["id"], "plan": "act_now",
+           "hours_left": round((deadline - now).total_seconds() / 3600, 1),
+           "why": f"less than {lead_hours:g} hours of notice is left", "action_by": trial_view.get("action_by")}
     fallback = max(now + timedelta(minutes=30), deadline - timedelta(hours=24))
     if fallback < deadline - timedelta(hours=1):
         out["fallback_at"] = fmt(fallback, zone)
@@ -474,7 +530,9 @@ def main(argv=None) -> int:
     m.add_argument("--as", dest="as_", required=True, choices=sorted(USER_MARKS))
     timed(m)
     purpose = sub.add_parser("purpose", help="save the student's stated reason and optional need-until date")
-    purpose.add_argument("--id", required=True)
+    who = purpose.add_mutually_exclusive_group(required=True)
+    who.add_argument("--id", help="a saved record")
+    who.add_argument("--service", help="service name; creates a record if none is saved yet")
     purpose.add_argument("--text", required=True)
     purpose.add_argument("--until", help="student-stated date or datetime; omit if not known")
     timed(purpose)
@@ -492,7 +550,7 @@ def main(argv=None) -> int:
 
         if args.cmd == "add":
             items = read_items(args.file)
-            changes, w = ingest(state, items, now)
+            changes, w = ingest(state, items, now, zone)
             warnings += w
             views = summary(state, zone, now, True)
             save_state(path, state)
@@ -525,7 +583,7 @@ def main(argv=None) -> int:
                                 (not args.ref and r.get("at") == at.isoformat()))]
                 reminders.append({
                     "at": at.isoformat(), "ref": args.ref, "created_at": now.isoformat(),
-                    "for_deadline": view.get("action_by_iso")})
+                    "for_deadline": view.get("reminder_anchor_iso")})
             else:
                 before = trial.get("reminders", [])
                 trial["reminders"] = [r for r in before if args.ref and r.get("ref") != args.ref]
@@ -543,16 +601,27 @@ def main(argv=None) -> int:
             v["id"] = args.id
             out = {"trial": v}
         elif args.cmd == "purpose":
-            trial = state["trials"].get(args.id)
-            if trial is None:
-                raise Problem(f"No saved trial '{args.id}'.", 3)
             if not args.text.strip():
                 raise Problem("Purpose text cannot be empty.")
             parse_when(args.until, zone, warnings, "--until")
+            tid = args.id
+            if tid is None:
+                name = args.service.strip()
+                if not name:
+                    raise Problem("--service cannot be empty.")
+                tid, match = find_trial(state, {"service": name})
+                if match == "ambiguous":
+                    raise Problem(f"More than one saved {name} record; run list and use --id.")
+                if tid is None:
+                    tid = new_id(state, name, None)
+                    state["trials"][tid] = {"service": name, "account": None, "evidence": []}
+            trial = state["trials"].get(tid)
+            if trial is None:
+                raise Problem(f"No saved trial '{tid}'.", 3)
             trial["purpose"] = {"text": args.text.strip()[:240], "until": args.until, "at": now.isoformat()}
             save_state(path, state)
             v = derive(trial, zone, now)
-            v["id"] = args.id
+            v["id"] = tid
             out = {"trial": v}
         elif args.cmd == "forget":
             if args.id not in state["trials"]:

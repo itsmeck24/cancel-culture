@@ -1,6 +1,6 @@
 ---
 name: cancel-culture
-description: Helps students act before trial charges, paid renewals and student-discount expiry, with evidence-backed deadlines, optional need-until preferences and official cancel or reverify routes. Use when a student mentions a free trial, forwards or screenshots a trial or subscription email, asks what trials or subscriptions are about to charge them, says "check my email for trials", mentions an expiring student discount, wants a subscription only until a project or semester ends, asks how to cancel a trial, or says they cancelled one, even if they never say "subscription".
+description: Stops students paying for free trials, renewals and expiring student discounts they didn't mean to keep, with clear deadlines, reminders and the official way to cancel or renew. Use when a student mentions a free trial, forwards or screenshots a trial or subscription email, asks what trials or subscriptions are about to charge them, says "check my email for trials", mentions an expiring student discount, wants a subscription only until a project or semester ends, asks how to cancel a trial, or says they cancelled one, even if they never say "subscription".
 ---
 
 # Cancel Culture
@@ -8,13 +8,13 @@ description: Helps students act before trial charges, paid renewals and student-
 Your semester ends. Your subscriptions don't.
 
 Help students decide what to cancel, what to keep and which student discounts to renew before the
-next charge. Cover free trials, explicitly documented paid renewals and expiring student pricing.
-Remember why a subscription was needed only when the student tells you. Never infer usage or assume
-that a finished project means they want to cancel. The student makes every account change.
+next charge: free trials, paid renewals the email states, and student pricing that is about to end.
+If the student says why they got something ("only until my presentation"), remember it and check in
+after that. Never guess whether they still use it. The student makes every account change.
 
 Cubbie reads the messages. The script `scripts/trials.py` (Python 3, no packages, no keys) keeps the saved
-subscription list, merges later evidence and calculates reminder times. Scanning twice adds no duplicate
-evidence; check existing reminder references before creating another reminder. Run every command from this Skill's folder.
+list, lets newer emails replace older dates and works out reminder times. Reading the same email twice
+adds nothing; check the saved reminders before creating another. Run every command from this Skill's folder.
 
 ## When to use
 
@@ -133,18 +133,26 @@ Save their own answer and optional date:
 python3 scripts/trials.py purpose --id <id> --text "<student's reason>" --until "<stated date>" --now "<local now>" --tz "<zone>"
 ```
 
+If nothing is saved for that service yet (the student just says "I only need this editor until Nov 12"),
+use `--service "<name>"` instead of `--id`; a later email for that service joins the same record. Then ask
+for the trial or renewal email, or the charge date, so the actual cutoff is known.
+
 Omit `--until` if no date was given. Do not infer a semester end or read Canvas without being asked.
-A future purpose-end date can produce an earlier review reminder; it does not replace the actual
-billing/cancellation date. If changing the purpose changes `action_by`, reconcile any old reminder.
+The need-until date adds a check-in after that need ends; it never replaces the billing cutoff. After
+saving a reason, run `plan` again and, if `list` shows `reminder: move`, offer to move the reminder.
 
 ## 4. Remind me
 
 1. Run `python3 scripts/trials.py plan --id <id> --now "<local now>" --tz "<zone>"` (add `--hour 20` if the
    student prefers another hour; the default is 6 pm and at least 48 hours before the cutoff).
-   - `remind`: propose `at` and wait for yes or a different time.
-   - `act_now`: say the action date is close (`action_by`, `hours_left`) and offer the relevant cancel/reverify/review action; offer
-     `fallback_at` as a last reminder if they still want one.
+   - `remind`: propose `at` and wait for yes or a different time. `kind: after_need_ends` means it is a
+     check-in after the student's stated need ends (still before any charge); say that. A `note` explains a
+     fallback to the normal reminder.
+   - `act_now`: say the action date is close (`action_by`, `hours_left`) and offer the relevant cancel,
+     reverify or review step; offer `fallback_at` as a last reminder if they still want one.
+   - `ask_now`: the date they said they needed it until has passed; ask whether they still need it.
    - `passed`: say the action date has passed; don't guess whether they were charged.
+   - `no_reminder` with no date known: ask for the email or the charge date.
 2. After the student agrees, create a one-time scheduled check-in at that time with Cubbie's reminders.
    Word it so it makes sense on its own days later:
    "Cancel Culture check-in for <service> (record <id>), review by <action_by> for <action_reason>. Use the cancel-culture
@@ -163,8 +171,9 @@ billing/cancellation date. If changing the purpose changes `action_by`, reconcil
 ## 5. Reverify student pricing
 
 Find the service's official student-verification guidance using `references/billing-routes.md`. Offer the
-official account/help link and brief steps. Verify whether the student is still eligible; do not promise
-a discount based only on a school email. The student signs in and submits verification themselves.
+official account/help link and brief steps, including the eligibility rules that page states. Only the
+provider decides eligibility: don't promise a discount, even with a school email. The student signs in
+and submits verification themselves.
 
 If they say "done" after reverification, use `mark --as reverification_reported`, not cancellation.
 Remove its reminder after tool success. Say the update is reported by them, and offer to check a provider
