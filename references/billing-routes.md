@@ -1,4 +1,4 @@
-# Where to cancel, by who bills the student
+# Cancellation and student-verification routes
 
 Pick the route by the **biller** (who charges the card), not by the app's brand. An app bought through the
 App Store is cancelled with Apple even if the email has the app's logo. Uninstalling an app never cancels it.
@@ -12,7 +12,8 @@ biller's own help site again and use what it says now.
 - On iPhone: Settings, tap your name, Subscriptions, pick the subscription, Cancel Subscription.
 - On the web, Apple's page points to the subscriptions page at account.apple.com.
 - Apple's page says to cancel a trial "at least 24 hours before the trial ends". The script already moves
-  the deadline 24 hours earlier when the biller is Apple and no cancel-by date was stated.
+  the deadline 24 hours earlier only for an Apple trial with a known trial end and no explicit cutoff.
+  Do not apply this trial-specific rule to ordinary paid renewals or student reverification.
 
 ## Google Play (receipts from Google Play / googleplay-noreply@google.com)
 
@@ -44,3 +45,19 @@ verified, say the route is unresolved.
 Trial emails often contain "manage subscription" links. Use one only if it is on the same official domain
 as the sender and contains no sign-in token or one-time code. Never pass on a link from a domain that
 merely looks similar. When in doubt, use the help page you found yourself.
+
+## Student discount renewal
+
+Reverification is a different action from cancellation. Start with the service's official student-plan
+help page and confirm eligibility rules, the account route and any explicit deadline. If payment is
+through another provider, check whether that plan supports student pricing before recommending a switch.
+Do not promise eligibility, retroactive credits or a new price without evidence.
+
+Spotify's official guidance (reviewed 2026-10-24):
+https://support.spotify.com/us/article/renew-student-discount/
+Students renew eligibility annually, for up to four years. Without renewal, the subscription continues
+at full price. Follow the official account-page reverification steps. Use the student's message for their
+actual expiry and rates; do not hardcode prices or assume every account is eligible.
+
+For other services, find current official instructions first. If the route cannot be verified, say so.
+A user's "done" is reverification reported, not provider-confirmed eligibility or cancellation.

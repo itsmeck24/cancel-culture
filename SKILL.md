@@ -1,23 +1,27 @@
 ---
 name: cancel-culture
-description: Catches free trials before they charge, finding the real cancel-by deadline in trial emails, reminding the student in time and pointing to the official way to cancel. Use when a student mentions a free trial, forwards or screenshots a trial or subscription email, asks what trials or subscriptions are about to charge them, says "check my email for trials", asks how to cancel a trial, or says they cancelled one, even if they never say "subscription".
+description: Helps students act before trial charges, paid renewals and student-discount expiry, with evidence-backed deadlines, optional need-until preferences and official cancel or reverify routes. Use when a student mentions a free trial, forwards or screenshots a trial or subscription email, asks what trials or subscriptions are about to charge them, says "check my email for trials", mentions an expiring student discount, wants a subscription only until a project or semester ends, asks how to cancel a trial, or says they cancelled one, even if they never say "subscription".
 ---
 
 # Cancel Culture
 
-Students start a free trial to get one thing done (a video editor for a class project, a study app for
-exam week, a streaming service for one show), then forget until the charge arrives. This Skill turns trial emails into a clear cancel-by deadline, sets a reminder early enough to act,
-and sends the student to the right place to cancel. The student always does the cancelling.
+Your semester ends. Your subscriptions don't.
+
+Help students decide what to cancel, what to keep and which student discounts to renew before the
+next charge. Cover free trials, explicitly documented paid renewals and expiring student pricing.
+Remember why a subscription was needed only when the student tells you. Never infer usage or assume
+that a finished project means they want to cancel. The student makes every account change.
 
 Cubbie reads the messages. The script `scripts/trials.py` (Python 3, no packages, no keys) keeps the saved
-list of trials, merges later emails over earlier ones and does the date math, so deadlines stay exact and
-scanning twice never creates a second reminder. Run every command from this Skill's folder.
+subscription list, merges later evidence and calculates reminder times. Scanning twice adds no duplicate
+evidence; check existing reminder references before creating another reminder. Run every command from this Skill's folder.
 
 ## When to use
 
 - "just started a free trial for a video editor for my project" (with or without a screenshot)
 - A forwarded or pasted trial confirmation, extension, price change or cancellation email
 - "check my email for free trials" / "am I about to get charged for anything?"
+- "my student discount is ending" / "I only need this until my presentation"
 - "how do I cancel that trial?" / "I cancelled it" / "keep it, I'm using it"
 
 Do not use it for budgeting, bank transactions, refunds or disputing a charge. Say those are outside this
@@ -37,7 +41,8 @@ read the image. That message is enough to start; go to step 2.
 
 **"Check my email"**: search the student's email with Cubbie's email events or Gmail search, last 90 days,
 for trial and subscription messages: phrases such as "free trial", "trial ends", "your trial", "will be
-charged", "first payment", "renews on", "subscription confirmation", "auto-renew", plus receipts from the
+charged", "first payment", "renews on", "subscription confirmation", "auto-renew", "student discount", "reverify", "student eligibility",
+"discount expires", "annual renewal", plus receipts from the
 App Store and Google Play. Then, for each service found, search again for newer messages from the same
 sender or service (extensions, price changes, cancellation confirmations, receipts), because a later
 message can change everything. Say how far back you looked; never claim you found every trial.
@@ -59,10 +64,12 @@ start date and length plainly; if it does, write the result and say so in `quote
   "sender": "billing@service.com", "subject": "Your trial", "sent_at": "2026-10-20T09:00:00-07:00",
   "service": "<service name as the email writes it>",
   "account": "<what tells two accounts apart: the address it was sent to, a username; never card digits>",
-  "kind": "trial_started | dates_changed | price_changed | renewal_notice | cancelled | charged | other",
+  "kind": "trial_started | dates_changed | price_changed | renewal_notice | discount_expiring | discount_renewed | cancelled | charged | other",
   "biller": "direct | apple | google_play | paypal | other | unknown", "biller_name": null,
   "trial_end": "2026-11-05T12:00:00-07:00", "charge_at": "2026-11-05T12:00:00-07:00",
   "cancel_by": "2026-11-04T12:00:00-07:00", "access_ends_at": null,
+  "discount_ends": null, "reverify_by": null,
+  "current_amount": null, "current_currency": null, "current_interval": null,
   "amount": 12.00, "currency": "USD", "interval": "month", "price_note": null,
   "immediate_access_loss": true,
   "quote": "<the one sentence that states the deadline or status, under 240 characters>"
@@ -81,6 +88,15 @@ start date and length plainly; if it does, write the result and say so in `quote
   `cancelled`; a receipt for a charge already made is `charged`.
 - `immediate_access_loss`: true only if the message or the official page says cancelling ends access right
   away; false if it says access continues; otherwise null.
+- `discount_expiring`: the student's discount or eligibility is ending. `reverify_by` is only an explicit
+  reverification deadline; `discount_ends` is the stated expiry, not a guaranteed cancellation cutoff.
+  `amount`, `currency`, `interval` describe the upcoming full-price charge if known. `current_amount`,
+  `current_currency`, `current_interval` describe the existing student rate only when stated. Never infer
+  eligibility or fill missing prices from another plan. Do not calculate savings across unlike periods.
+- `discount_renewed`: a provider confirms the student rate was renewed, not merely an application submitted.
+- `renewal_notice`: an explicit upcoming paid renewal, including annual billing. Never extrapolate the
+  next charge from an old receipt. Apple's trial-specific advance-cancellation rule does not apply to
+  ordinary paid renewals.
 - Never store card numbers, sign-in links, codes or whole email bodies.
 
 Save the items to a file (for example `/tmp/cc-evidence.json`) and run:
@@ -94,41 +110,69 @@ nothing. To see the list later: `python3 scripts/trials.py list --now "<local no
 
 ## 3. Tell the student what needs action
 
-Use only what the script printed. Lead with trials where `needs_action` is true, earliest `cancel_by`
-first, at most three. For each: service, cancel-by time, price, and one plain reason when it matters
-(`basis` says the time was not stated or the deadline was moved for Apple; `notes` says dates were
-replaced by a newer email). Then one line for anything already cancelled, extended or held for review.
-For `needs_review` or `needs_info`, ask the one question that settles it.
+Use only what the script printed. Lead with records where `needs_action` is true, earliest `action_by`
+first, at most three. Each line names the service, reason, relevant action date and known price.
+`basis` distinguishes a stated cutoff from a conservative planning estimate. A date-only value is not
+an exact midnight deadline. For student pricing, say "reverify by" or "discount expires", never call it
+"cancel by". `price` is the next listed rate; `current_price` is the old rate, if known.
 
-Never add up prices as "money saved". Never say a trial is cancelled unless the status says so.
+Then one line for cancelled, extended or review-needed records. For missing facts ask one relevant
+question. Never add prices as savings, infer charges occurred, or imply the student qualifies to renew.
 
-End with one question about the most urgent trial: "Cancel <service> now, remind you first, or keep it?"
+Choose actions based on `event_type`:
+- `student_discount`: "Reverify your eligibility, cancel, remind you, or keep the upcoming price?"
+- `trial` or `paid_renewal`: "Cancel, remind you before renewal, or keep it?"
+- If `purpose` is present, mention it as the student's own reason. If `purpose_due` is true ask whether
+  they still need the service, without saying it is unused.
+
+### Optional: why did you get it?
+Ask only when useful: "Keeping this long-term, or just for something?" Never block the main flow on it.
+Save their own answer and optional date:
+
+```bash
+python3 scripts/trials.py purpose --id <id> --text "<student's reason>" --until "<stated date>" --now "<local now>" --tz "<zone>"
+```
+
+Omit `--until` if no date was given. Do not infer a semester end or read Canvas without being asked.
+A future purpose-end date can produce an earlier review reminder; it does not replace the actual
+billing/cancellation date. If changing the purpose changes `action_by`, reconcile any old reminder.
 
 ## 4. Remind me
 
 1. Run `python3 scripts/trials.py plan --id <id> --now "<local now>" --tz "<zone>"` (add `--hour 20` if the
    student prefers another hour; the default is 6 pm and at least 48 hours before the cutoff).
    - `remind`: propose `at` and wait for yes or a different time.
-   - `act_now`: say the deadline is close (`cancel_by`, `hours_left`) and suggest cancelling now; offer
+   - `act_now`: say the action date is close (`action_by`, `hours_left`) and offer the relevant cancel/reverify/review action; offer
      `fallback_at` as a last reminder if they still want one.
-   - `passed`: say the cancel-by time has passed; don't guess whether they were charged.
+   - `passed`: say the action date has passed; don't guess whether they were charged.
 2. After the student agrees, create a one-time scheduled check-in at that time with Cubbie's reminders.
    Word it so it makes sense on its own days later:
-   "Cancel Culture check-in for <service> (trial <id>), cancel by <cancel_by>. Use the cancel-culture
+   "Cancel Culture check-in for <service> (record <id>), review by <action_by> for <action_reason>. Use the cancel-culture
    Skill: search the student's email for <service> messages newer than <today>, add any with trials.py,
-   run trials.py list, then text the student the cancel-by time and how to cancel, or what changed if it
-   was extended or cancelled. If that can't be done, text: <service> trial, cancel by <cancel_by>,
-   <price>."
+   run trials.py list, then text the appropriate cancel/keep/reverify decision and deadline, or what changed if it
+   was extended or cancelled. If that can't be done, text: Earlier snapshot for <service>: <action_reason>, review by <action_by>, <price>. Verify current account details before acting."
 3. Only after Cubbie confirms the reminder was created, record it:
    `python3 scripts/trials.py reminder set --id <id> --at "<reminder time with offset>" --ref "<anything Cubbie returned to identify it>" --now "<local now>" --tz "<zone>"`
    Then confirm in one line with the exact day and time. If creating it failed, say it is not set and give
    the time so the student can set their own alarm. Never say a reminder exists unless it was created.
 4. When a later `list` shows `reminder: move` (the dates changed) or `remove` (cancelled, kept or passed),
    change or delete that reminder with Cubbie's reminders, then run `reminder clear --id <id>` and, for a
-   move, `reminder set` with the new time. Tell the student what moved. If deleting fails, say an old
-   reminder may still arrive.
+   move, `reminder set` with the new time. Tell the student what moved. If deleting fails, retain its
+   reference and say an old reminder may still arrive; do not clear local state or create a replacement yet.
 
-## 5. Cancel now
+## 5. Reverify student pricing
+
+Find the service's official student-verification guidance using `references/billing-routes.md`. Offer the
+official account/help link and brief steps. Verify whether the student is still eligible; do not promise
+a discount based only on a school email. The student signs in and submits verification themselves.
+
+If they say "done" after reverification, use `mark --as reverification_reported`, not cancellation.
+Remove its reminder after tool success. Say the update is reported by them, and offer to check a provider
+confirmation. Ingest a matching confirmation as `discount_renewed`; the script then reports
+`discount_renewal_evidenced`. Neither status means the subscription was cancelled. A later explicit
+renewal/discount-expiration notice may reopen a new decision. Do not fabricate that future event.
+
+## 6. Cancel now
 
 1. Find the route in `references/billing-routes.md` by the trial's `biller`. For a service that bills
    directly, find its official help page as that file says; never guess a link.
@@ -143,28 +187,29 @@ End with one question about the most urgent trial: "Cancel <service> now, remind
 If no official page can be found, say so, give the steps the email itself describes if any, and never
 guess a link.
 
-## 6. "Done", "keep it", "forget it"
+## 7. "Done", "keep it", "forget it"
 
-- "done" / "cancelled it": run `mark --id <id> --as cancellation_reported`, then remove its reminder (step 4.4).
+- "done": resolve which action they completed; ask if ambiguous. After reverifying use step 5.
+- "cancelled it" / "done" after cancellation: run `mark --id <id> --as cancellation_reported`, then remove its reminder (step 4.4).
   Say it is marked as cancelled by them, and offer to confirm it if they forward the cancellation email or
   when one arrives (adding it makes the status `cancellation_evidenced`).
 - "keep it": run `mark --id <id> --as kept` and remove its reminder. It only stops reminders for this trial.
-- "forget <service>": run `python3 scripts/trials.py forget --id <id>` and remove its reminder.
+- "forget <service>": read the reminder references, remove the reminders first and verify success, then
+  run `python3 scripts/trials.py forget --id <id>`. If removal fails, retain the references and explain.
 
 ## Replies
 
 Short, plain text, no Markdown, one idea per message. Lead with the most urgent deadline. Write times as
-the script formats them ("Wed Nov 4, 12:00 PM MST"). Links go on their own line. At most three trials in a
+the script formats them ("Wed Nov 4, 12:00 PM MST"). Links go on their own line. At most three subscription decisions in a
 message; for more, offer the rest or a short document. Never shame the student for signing up.
 
-Example:
+Illustrative example; names and dates are fictional:
 
 ```text
-2 trials need action:
-Video editor: cancel by Wed Nov 4, 12 PM. Then $12/month. Cancelling ends access right away.
-Flashcard app: moved to Nov 11, 12 PM (a newer email extended it). $8/month.
-Your music trial is already cancelled; access until Oct 29.
-Cancel the video editor now, remind you first, or keep it?
+Student music plan: discount expires Nov 4; check eligibility to renew. Next price not stated.
+Portfolio tool: renews Nov 11. You said it was for applications — still need it?
+Your study trial is already cancelled.
+Start with renewing the student discount?
 ```
 
 ## When something fails
